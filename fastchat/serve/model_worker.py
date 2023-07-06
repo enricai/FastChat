@@ -11,6 +11,7 @@ import time
 from typing import List
 import threading
 import uuid
+from datetime import datetime
 
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -352,10 +353,20 @@ async def api_generate_stream(request: Request):
 
 @app.post("/worker_generate")
 async def api_generate(request: Request):
+    start_time = time.time()  # Start measuring time
+    logger.info(f'START {datetime.fromtimestamp(start_time)}')
     params = await request.json()
+    logger.info(f'received request {params}')
     await acquire_worker_semaphore()
+    logger.info(f'model semaphore done')
+    gen_start_time = time.time()  # Start measuring time
     output = worker.generate_gate(params)
+    gen_end_time = time.time()  # Stop measuring time
+    gen_await_time = gen_end_time - start_time  # Calculate the time spent awaiting
+    logger.info(f'received model output {output["error_code"]}...releasing model semaphore (GENERATE AWAIT TIME: {gen_await_time:.2f}s)')
     release_worker_semaphore()
+    total_time = time.time()-start_time
+    logger.info(f'returning model response (TOTAL TIME: {total_time:.2f})')
     return JSONResponse(output)
 
 

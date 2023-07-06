@@ -7,6 +7,8 @@
 Usage:
 python3 -m fastchat.serve.openai_api_server
 """
+import uuid
+import time
 import asyncio
 import argparse
 import asyncio
@@ -63,7 +65,9 @@ from fastchat.protocol.api_protocol import (
 )
 
 logger = logging.getLogger(__name__)
+server_logger = logging.getLogger("uvicorn.access")
 
+comp_stats = {}
 conv_template_map = {}
 
 
@@ -342,6 +346,20 @@ async def show_available_models():
 @app.post("/v1/chat/completions", dependencies=[Depends(check_api_key)])
 async def create_chat_completion(request: ChatCompletionRequest):
     """Creates a completion for the chat message"""
+    request_id = uuid.uuid4()
+    start_time = time.time()
+    comp_stats[request_id] = {
+        'start_time': start_time,
+    }
+    server_logger.info(
+        "%s %s %s %s %d",
+        f"{request_id}",
+        "STARTING",
+        f"{json.dumps(comp_stats[request_id], indent=2)}",
+        "1.1",
+        200,
+    )
+
     error_check_ret = await check_model(request)
     if error_check_ret is not None:
         return error_check_ret
@@ -373,13 +391,24 @@ async def create_chat_completion(request: ChatCompletionRequest):
 
     choices = []
     chat_completions = []
+    comp_start_time = time.time()
+    comp_stats[request_id]['comp_start_time'] = comp_start_time
     for i in range(request.n):
+        create_task_start_time = time.time()
+        comp_stats[request_id]['create_task_start_time'] = create_task_start_time
         content = asyncio.create_task(generate_completion(gen_params))
         chat_completions.append(content)
+        comp_stats[request_id]['create_task_total_time'] = time.time() - create_task_start_time
     try:
+        run_tasks_start_time = time.time()
+        comp_stats[request_id]['run_tasks_start_time'] = run_tasks_start_time
         all_tasks = await asyncio.gather(*chat_completions)
+        comp_stats[request_id]['run_tasks_total_time'] = time.time() - run_tasks_start_time
     except Exception as e:
         return create_error_response(ErrorCode.INTERNAL_ERROR, str(e))
+    comp_end_time = time.time()
+    comp_total_time = comp_end_time - comp_start_time
+    comp_stats[request_id]['comp_total_time'] = comp_total_time
     usage = UsageInfo()
     for i, content in enumerate(all_tasks):
         if content["error_code"] != 0:
@@ -396,6 +425,17 @@ async def create_chat_completion(request: ChatCompletionRequest):
             for usage_key, usage_value in task_usage.dict().items():
                 setattr(usage, usage_key, getattr(usage, usage_key) + usage_value)
 
+    end_time = time.time()
+    total_time = end_time - start_time
+    comp_stats[request_id]['total_time'] = total_time
+    server_logger.info(
+        "%s %s %s %s %d",
+        f"{request_id}",
+        "STATS",
+        f"{json.dumps(comp_stats[request_id], indent=2)}",
+        "1.1",
+        200,
+    )
     return ChatCompletionResponse(model=request.model, choices=choices, usage=usage)
 
 
@@ -588,6 +628,20 @@ async def generate_completion(payload: Dict[str, Any]):
     async with httpx.AsyncClient() as client:
         worker_addr = await get_worker_address(payload["model"], client)
 
+        params = {
+            "url": worker_addr + "/worker_generate",
+            "headers": headers,
+            "json": payload,
+            "timeout": WORKER_API_TIMEOUT,
+        }
+        server_logger.info(
+            "%s %s %s %s %d",
+            "completion",
+            "STARTING",
+            f"{json.dumps(params, indent=2)}",
+            "1.1",
+            200,
+        )
         response = await client.post(
             worker_addr + "/worker_generate",
             headers=headers,
@@ -707,6 +761,9 @@ async def count_tokens(request: APITokenCheckRequest):
 @app.post("/api/v1/chat/completions")
 async def create_chat_completion(request: APIChatCompletionRequest):
     """Creates a completion for the chat message"""
+    start_time = time.time()
+    logger.info(f"START TIME: {start_time}")
+
     error_check_ret = await check_model(request)
     if error_check_ret is not None:
         return error_check_ret
@@ -764,6 +821,8 @@ async def create_chat_completion(request: APIChatCompletionRequest):
         for usage_key, usage_value in task_usage.dict().items():
             setattr(usage, usage_key, getattr(usage, usage_key) + usage_value)
 
+    logger.info(f"END TIME: {end_time}")
+    logger.info(f"TOTAL PROCESSING TIME FOR REQUEST: {end_time - start_time} seconds")
     return ChatCompletionResponse(model=request.model, choices=choices, usage=usage)
 
 
