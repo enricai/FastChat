@@ -387,6 +387,7 @@ class VicunaAdapter(BaseModelAdapter):
         model = AutoModelForCausalLM.from_pretrained(
             model_path,
             low_cpu_mem_usage=True,
+            max_position_embeddings=8192,
             **from_pretrained_kwargs,
         )
         self.raise_warning_for_old_weights(model)
