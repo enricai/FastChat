@@ -6,6 +6,7 @@ import sys
 import time
 from typing import Iterable, Optional, Dict
 import warnings
+import logging
 
 import psutil
 import torch
@@ -36,6 +37,7 @@ from fastchat.model.model_adapter import (
 from fastchat.modules.gptq import GptqConfig
 from fastchat.utils import is_partial_stop, is_sentence_complete, get_context_length
 
+server_logger = logging.getLogger("uvicorn.access")
 
 def prepare_logits_processor(
     temperature: float, repetition_penalty: float, top_p: float, top_k: int
@@ -63,6 +65,7 @@ def generate_stream(
     stream_interval: int = 2,
     judge_sent_end: bool = False,
 ):
+    # stream_interval = 1 CHANGING THIS PARAM DIDN'T SEEM TO MAKE A DIFFERENCE
     # Read parameters
     prompt = params["prompt"]
     len_prompt = len(prompt)
@@ -71,6 +74,8 @@ def generate_stream(
     top_p = float(params.get("top_p", 1.0))
     top_k = int(params.get("top_k", -1))  # -1 means disable
     max_new_tokens = int(params.get("max_new_tokens", 256))
+    # max_new_tokens = 2 # THIS IS FASTER BUT CUTS OFF THE RESPONSE
+    # max_new_tokens = 64 # THIS IS SLOWER BUT LEAVES THE ENTIRE RESPONSE, AT LEAST FOR A SIMPLE ANSWER
     echo = bool(params.get("echo", True))
     stop_str = params.get("stop", None)
     stop_token_ids = params.get("stop_token_ids", None) or []
@@ -103,7 +108,25 @@ def generate_stream(
 
     past_key_values = out = None
     sent_interrupt = False
+    full_start_time = time.time()
+    server_logger.info(
+        "%s %s %s %s %d",
+        "0",
+        f"inference:generate_stream FULL START: {max_new_tokens}",
+        f"{full_start_time}",
+        "1.1",
+        200,
+    )
     for i in range(max_new_tokens):
+        start_time = time.time()
+        server_logger.info(
+            "%s %s %s %s %d",
+            f"{i}",
+            f"inference:generate_stream START",
+            f"{i}",
+            "1.1",
+            200,
+        )
         if i == 0:  # prefill
             if model.config.is_encoder_decoder:
                 out = model.decoder(
@@ -169,6 +192,14 @@ def generate_stream(
         else:
             stopped = False
 
+        server_logger.info(
+            "%s %s %s %s %d",
+            f"{i}",
+            "inference:generate_stream REPORT",
+            f"{time.time()-start_time}",
+            "1.1",
+            200,
+        )
         # Yield the output tokens
         if i % stream_interval == 0 or i == max_new_tokens - 1 or stopped:
             if echo:
@@ -185,6 +216,14 @@ def generate_stream(
                 clean_up_tokenization_spaces=True,
             )
             # TODO: For the issue of incomplete sentences interrupting output, apply a patch and others can also modify it to a more elegant way
+            server_logger.info(
+                "%s %s %s %s %d",
+                f"{i}",
+                "inference:generate_stream REPORT",
+                f"{time.time()-start_time}",
+                "1.1",
+                200,
+            )
             if judge_sent_end and stopped and not is_sentence_complete(output):
                 if len(tokens) > 1:
                     token = tokens[1]
@@ -217,6 +256,14 @@ def generate_stream(
                 else:
                     raise ValueError("Invalid stop field type.")
 
+            server_logger.info(
+                "%s %s %s %s %d",
+                f"{i}",
+                "inference:generate_stream REPORT",
+                f"{time.time()-start_time}",
+                "1.1",
+                200,
+            )
             # Prevent yielding partial stop sequence
             if not partially_stopped:
                 yield {
@@ -229,8 +276,25 @@ def generate_stream(
                     "finish_reason": None,
                 }
 
+        server_logger.info(
+            "%s %s %s %s %d",
+            f"{i}",
+            "inference:generate_stream END",
+            f"{time.time()-start_time}",
+            "1.1",
+            200,
+        )
         if stopped:
             break
+
+    server_logger.info(
+        "%s %s %s %s %d",
+        "0",
+        "inference:generate_stream FULL END",
+        f"{time.time()-full_start_time}",
+        "1.1",
+        200,
+    )
 
     # Finish stream event, which contains finish reason
     if i == max_new_tokens - 1:

@@ -138,7 +138,7 @@ async def check_length(request, prompt, max_tokens):
             json={"model": request.model},
             timeout=WORKER_API_TIMEOUT,
         )
-        context_len = response.json()["context_length"]
+        context_len = 8000
 
         response = await client.post(
             worker_addr + "/count_token",

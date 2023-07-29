@@ -1,5 +1,5 @@
 """Model adapter registration."""
-
+import logging
 import math
 import sys
 from typing import List, Optional

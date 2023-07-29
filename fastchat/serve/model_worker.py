@@ -1,6 +1,7 @@
 """
 A model worker that executes the model.
 """
+import uuid
 import argparse
 import asyncio
 import dataclasses
@@ -47,6 +48,7 @@ from fastchat.utils import build_logger, pretty_print_semaphore, get_context_len
 
 worker_id = str(uuid.uuid4())[:8]
 logger = build_logger("model_worker", f"model_worker_{worker_id}.log")
+server_logger = logging.getLogger("uvicorn.access")
 
 app = FastAPI()
 
@@ -218,6 +220,15 @@ class ModelWorker(BaseModelWorker):
         self.call_ct += 1
 
         try:
+            start_time = time.time()
+            server_logger.info(
+                "%s %s %s %s %d",
+                f"{self.call_ct}",
+                "generate_stream_gate START",
+                f"{start_time}",
+                "1.1",
+                200,
+            )
             for output in self.generate_stream_func(
                 self.model,
                 self.tokenizer,
@@ -226,6 +237,15 @@ class ModelWorker(BaseModelWorker):
                 self.context_len,
                 self.stream_interval,
             ):
+                end_time = time.time()
+                server_logger.info(
+                    "%s %s %s %s %d",
+                    f"{self.call_ct}",
+                    f"generate_stream_gate END: {output['text']}",
+                    f"{end_time-start_time}",
+                    "1.1",
+                    200,
+                )
                 ret = {
                     "text": output["text"],
                     "error_code": 0,
@@ -354,7 +374,106 @@ async def api_generate_stream(request: Request):
 async def api_generate(request: Request):
     params = await request.json()
     await acquire_worker_semaphore()
+    request_id = uuid.uuid4()
+    start_time = time.time()
+    server_logger.info(
+        "%s %s %s %s %d",
+        f"{request_id}",
+        "START",
+        f"{start_time}",
+        "1.1",
+        200,
+    )
     output = worker.generate_gate(params)
+    end_time = time.time()
+    server_logger.info(
+        "%s %s %s %s %d",
+        f"{request_id}",
+        "END",
+        f"{end_time-start_time}",
+        "1.1",
+        200,
+    )
+    # request_id = uuid.uuid4()
+    # start_time = time.time()
+    # server_logger.info(
+    #     "%s %s %s %s %d",
+    #     f"{request_id}",
+    #     "START",
+    #     f"{start_time}",
+    #     "1.1",
+    #     200,
+    # )
+    # output = worker.generate_gate(params)
+    # end_time = time.time()
+    # server_logger.info(
+    #     "%s %s %s %s %d",
+    #     f"{request_id}",
+    #     "END",
+    #     f"{end_time-start_time}",
+    #     "1.1",
+    #     200,
+    # )
+    # request_id = uuid.uuid4()
+    # start_time = time.time()
+    # server_logger.info(
+    #     "%s %s %s %s %d",
+    #     f"{request_id}",
+    #     "START",
+    #     f"{start_time}",
+    #     "1.1",
+    #     200,
+    # )
+    # output = worker.generate_gate(params)
+    # end_time = time.time()
+    # server_logger.info(
+    #     "%s %s %s %s %d",
+    #     f"{request_id}",
+    #     "END",
+    #     f"{end_time-start_time}",
+    #     "1.1",
+    #     200,
+    # )
+    # request_id = uuid.uuid4()
+    # start_time = time.time()
+    # server_logger.info(
+    #     "%s %s %s %s %d",
+    #     f"{request_id}",
+    #     "START",
+    #     f"{start_time}",
+    #     "1.1",
+    #     200,
+    # )
+    # output = worker.generate_gate(params)
+    # end_time = time.time()
+    # server_logger.info(
+    #     "%s %s %s %s %d",
+    #     f"{request_id}",
+    #     "END",
+    #     f"{end_time-start_time}",
+    #     "1.1",
+    #     200,
+    # )
+    # request_id = uuid.uuid4()
+    # start_time = time.time()
+    # server_logger.info(
+    #     "%s %s %s %s %d",
+    #     f"{request_id}",
+    #     "START",
+    #     f"{start_time}",
+    #     "1.1",
+    #     200,
+    # )
+    # output = worker.generate_gate(params)
+    # end_time = time.time()
+    # server_logger.info(
+    #     "%s %s %s %s %d",
+    #     f"{request_id}",
+    #     "END",
+    #     f"{end_time-start_time}",
+    #     "1.1",
+    #     200,
+    # )
     release_worker_semaphore()
     return JSONResponse(output)
 
@@ -409,6 +528,12 @@ if __name__ == "__main__":
         default=5,
         help="Limit the model concurrency to prevent OOM.",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=5,
+        help="The number of workders run for this server.",
+    )
     parser.add_argument("--stream-interval", type=int, default=2)
     parser.add_argument("--no-register", action="store_true")
     args = parser.parse_args()
@@ -444,4 +569,12 @@ if __name__ == "__main__":
         gptq_config=gptq_config,
         stream_interval=args.stream_interval,
     )
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    uvicorn.run(
+        # "fastchat.serve.model_worker:app",
+        app,
+        host=args.host,
+        port=args.port,
+        # workers=args.workers,
+        # limit_concurrency=args.limit_worker_concurrency,
+        log_level="info",
+    )
